@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import ntcore
 
-from photon_decode import decode_pipeline_result
+from nt_utils.photon_decode import decode_pipeline_result
 
 
 @dataclass

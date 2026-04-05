@@ -9,6 +9,8 @@ class AppConfig:
     loop_sleep_s: float
     print_every_n_loops: int
     debug: bool
+    target_height_m: float
+    distance_eps: float
 
 
 APP = AppConfig(
@@ -18,4 +20,6 @@ APP = AppConfig(
     loop_sleep_s=0.02,
     print_every_n_loops=10,
     debug=True,
+    target_height_m=0.075,   # 球心高度，依你的模型調整
+    distance_eps=1e-6,       # 給 distance_from_pitch() 用的 tan 保護閾值
 )
