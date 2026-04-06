@@ -7,7 +7,6 @@ from typing import List, Literal, Optional, Tuple
 
 from nt_utils.pose2d_reader import Pose2d
 from pipeline.camera_processing import BallObservation
-from config.app_config import AppConfig
 
 # 插入遮蔽球位置修正
 # from pipeline.occlusion_correction import correct_ball_positions
@@ -154,7 +153,7 @@ def dedupe_two_cameras_fov(
     camera1_pose2d: Optional[Pose2d],
     camera2_pose2d: Optional[Pose2d],
     same_ball_error_m: float = 0.10,
-    max_angle_deg: float = 55.0,
+    max_angle_deg: float = 35.0,
     keep: KeepMode = "average",
 ) -> FovDedupeResult:
     """

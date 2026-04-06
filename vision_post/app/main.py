@@ -14,7 +14,11 @@ from config import APP, CAMERAS, NETWORK
 
 from nt_utils.pose2d_reader import Pose2dReader
 from nt_utils.photon_nt_multicam import PhotonMultiCamClient
-from nt_utils.nt_publish_utils import create_best_pose2d_publisher, publish_best_pile
+from nt_utils.nt_publish_utils import (
+    create_best_pose2d_publisher,
+    publish_best_pile,
+    close_publisher_instance,
+)
 
 from geometry_utils.pose_utils import camera_pose2d_calculate
 from pipeline.camera_processing import process_all_cameras
@@ -253,14 +257,15 @@ def main() -> None:
         print("\n[main] stopped by user")
 
     finally:
-        # 停止 PhotonMultiCamClient 背景執行緒
         try:
             pv.stop()
         except Exception:
             pass
 
-        # 保留 publish_inst 直到這裡才結束，避免 publisher 被 GC
-        _ = publish_inst
+        try:
+            close_publisher_instance(publish_inst)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

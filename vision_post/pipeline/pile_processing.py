@@ -7,7 +7,6 @@ from typing import Any, Literal, Optional, Sequence, Tuple
 from config.app_config import AppConfig
 from nt_utils.pose2d_reader import Pose2d
 
-# 依你的實際檔名修改 import 路徑
 from pile_utils.ballpiles_rect_centers import plan_ballpile_rect_centers
 from pile_utils.ballpiles_average_centers import plan_ballpile_centers
 from pile_utils.select_best_pile import (
