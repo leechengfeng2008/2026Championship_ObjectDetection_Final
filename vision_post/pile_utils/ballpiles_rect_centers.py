@@ -292,6 +292,9 @@ def plan_ballpile_rect_centers(
     - 各堆矩形 min/max
     - 各堆占用格子 cell_list
     - 前端友善 x/y lists
+
+    選堆邏輯已統一移至 select_best_pile.py 的 select_best_pile()，
+    本檔案不再提供 select_best_rect_pile()，避免雙軌維護造成不一致。
     """
     pts = _to_points(ball_xys)
     if not pts:
@@ -396,71 +399,3 @@ def plan_ballpile_rect_centers(
         rect_max_list=rect_max_list,
         cell_list=cell_list,
     )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public: select
-# ─────────────────────────────────────────────────────────────────────────────
-
-def select_best_rect_pile(
-    pile_plans: Sequence[RectPileInfo],
-    robot_pose2d,
-    ball_priority_0to10: float = 8.0,
-) -> Optional[RectPileInfo]:
-    """
-    從 RectPileInfo 列表中選出最佳堆。
-
-    ball_priority_0to10:
-        0  → 完全偏最近
-        10 → 完全偏球多
-
-    Tie-break：
-        final_score -> count -> distance -> pile_id
-    """
-    if not pile_plans:
-        return None
-
-    def _clamp(v: float, lo: float, hi: float) -> float:
-        return max(lo, min(hi, v))
-
-    def _norm(v: float, vmin: float, vmax: float) -> float:
-        if abs(vmax - vmin) < 1e-9:
-            return 1.0
-        return (v - vmin) / (vmax - vmin)
-
-    alpha = _clamp(float(ball_priority_0to10), 0.0, 10.0) / 10.0
-    counts = [p.count for p in pile_plans]
-    c_min, c_max = min(counts), max(counts)
-
-    if robot_pose2d is not None:
-        dists = [
-            math.hypot(
-                p.center_xy[0] - robot_pose2d.x,
-                p.center_xy[1] - robot_pose2d.y,
-            )
-            for p in pile_plans
-        ]
-        d_min, d_max = min(dists), max(dists)
-    else:
-        dists = [0.0] * len(pile_plans)
-        d_min = d_max = 0.0
-
-    best: Optional[RectPileInfo] = None
-    best_key = None
-
-    for pile, dist_m in zip(pile_plans, dists):
-        count_score = _norm(float(pile.count), float(c_min), float(c_max))
-
-        if robot_pose2d is None:
-            near_score = 0.0
-            final_score = count_score
-        else:
-            near_score = 1.0 - _norm(dist_m, d_min, d_max)
-            final_score = (1.0 - alpha) * near_score + alpha * count_score
-
-        key = (-final_score, -pile.count, dist_m, pile.pile_id)
-        if best_key is None or key < best_key:
-            best_key = key
-            best = pile
-
-    return best

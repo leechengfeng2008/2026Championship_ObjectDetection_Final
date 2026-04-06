@@ -25,10 +25,16 @@ from pipeline.camera_processing import process_all_cameras
 from pipeline.dedupe_processing import dedupe_two_cameras_fov
 from pipeline.pile_processing import process_piles
 
+# 目前 dedupe 只實作到雙相機，啟動時就先確認，避免執行期才炸
+_MAX_SUPPORTED_CAMERAS = 2
+
 
 def _get_enabled_camera_cfgs() -> List:
     """
     根據 NETWORK.cameras 與 camera_config.py，挑出目前要啟用的相機設定。
+
+    【修正】在此提前驗證啟用相機數量，超過上限直接中止，
+    而非等到執行期 dedupe 邏輯才拋出 NotImplementedError。
     """
     cfgs = []
     for name in NETWORK.cameras:
@@ -38,6 +44,15 @@ def _get_enabled_camera_cfgs() -> List:
         if not cfg.enabled:
             continue
         cfgs.append(cfg)
+
+    if len(cfgs) > _MAX_SUPPORTED_CAMERAS:
+        raise ValueError(
+            f"[main] 啟用的相機數量（{len(cfgs)}）超過目前支援的上限"
+            f"（{_MAX_SUPPORTED_CAMERAS}）。"
+            f" 請在 network_config.py 或 camera_config.py 停用多餘的相機。"
+            f" 啟用清單：{[c.name for c in cfgs]}"
+        )
+
     return cfgs
 
 
@@ -70,7 +85,12 @@ def _filter_fresh_camera_cfgs(pv: PhotonMultiCamClient, camera_cfgs: List) -> Li
 
 def main() -> None:
     # ------------------------------------------------------------
-    # 1. 初始化 NT readers / publishers
+    # 1. 啟動前驗證相機數量（提早發現設定錯誤）
+    # ------------------------------------------------------------
+    enabled_camera_cfgs = _get_enabled_camera_cfgs()
+
+    # ------------------------------------------------------------
+    # 2. 初始化 NT readers / publishers
     # ------------------------------------------------------------
     pv = PhotonMultiCamClient(
         server=NETWORK.nt_server,
@@ -95,8 +115,6 @@ def main() -> None:
         client_name="best-pile-publisher",
     )
 
-    enabled_camera_cfgs = _get_enabled_camera_cfgs()
-
     if APP.debug:
         print("[main] enabled cameras:", [c.name for c in enabled_camera_cfgs])
 
@@ -107,7 +125,7 @@ def main() -> None:
             loop_count += 1
 
             # ----------------------------------------------------
-            # 2. 讀 robot pose
+            # 3. 讀 robot pose
             # ----------------------------------------------------
             robot_pose = pose_reader.get_pose2d()
 
@@ -121,7 +139,7 @@ def main() -> None:
                 continue
 
             # ----------------------------------------------------
-            # 3. 過濾 stale / error cameras
+            # 4. 過濾 stale / error cameras
             # ----------------------------------------------------
             fresh_camera_cfgs = _filter_fresh_camera_cfgs(pv, enabled_camera_cfgs)
 
@@ -134,7 +152,7 @@ def main() -> None:
                 continue
 
             # ----------------------------------------------------
-            # 4. 第一條 pipeline：targets -> BallObservation
+            # 5. 第一條 pipeline：targets -> BallObservation
             # ----------------------------------------------------
             all_observations = process_all_cameras(
                 pv=pv,
@@ -153,7 +171,7 @@ def main() -> None:
                 continue
 
             # ----------------------------------------------------
-            # 5. 第二條 pipeline 前段：dedupe
+            # 6. 第二條 pipeline 前段：dedupe
             #    - 1 台相機：直接使用 observation 座標
             #    - 2 台相機：做 FOV-aware dedupe
             # ----------------------------------------------------
@@ -194,13 +212,14 @@ def main() -> None:
                 unique_ball_points = dedupe_result.unique_points
 
             else:
-                # 目前 dedupe 只寫到雙相機
+                # _get_enabled_camera_cfgs() 已在啟動時擋住這條路，
+                # 這裡理論上不會到達，但保留作為安全網。
                 raise NotImplementedError(
-                    "Current main.py supports up to 2 cameras for dedupe."
+                    f"Current main.py supports up to {_MAX_SUPPORTED_CAMERAS} cameras for dedupe."
                 )
 
             # ----------------------------------------------------
-            # 6. 第二條 pipeline 後段：分堆 -> 選最佳堆
+            # 7. 第二條 pipeline 後段：分堆 -> 選最佳堆
             # ----------------------------------------------------
             pile_result = process_piles(
                 ball_points=unique_ball_points,
@@ -213,7 +232,7 @@ def main() -> None:
             best_candidate = pile_result.selection_result.best_candidate
 
             # ----------------------------------------------------
-            # 7. 發布最佳球堆
+            # 8. 發布最佳球堆
             # ----------------------------------------------------
             publish_best_pile(
                 best_pose_pub,
@@ -222,7 +241,7 @@ def main() -> None:
             )
 
             # ----------------------------------------------------
-            # 8. Debug print
+            # 9. Debug print
             # ----------------------------------------------------
             if APP.debug and loop_count % APP.print_every_n_loops == 0:
                 print("=" * 70)

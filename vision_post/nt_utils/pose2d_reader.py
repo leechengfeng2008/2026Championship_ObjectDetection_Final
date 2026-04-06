@@ -24,6 +24,13 @@ class Pose2dReader:
     - 使用 readQueue() 只處理真正從 NT 收到的新資料
     - 在尚未收到第一筆真資料前，get_pose2d() 會回傳 None
     - 收到資料後，若暫時沒有新更新，則回傳 last_good
+
+    Bug 修正（readQueue fallback）：
+    - 原本 fallback 使用 get()，但 subscriber 帶了預設值 WpiPose2d()，
+      所以 get() 永遠不回傳 None，導致零座標被當成合法 pose 接受。
+    - 修正方式：改用 getAtomic() 取得帶時戳的值；
+      NT4 只有在真正收到 server 資料後才會寫入非零時戳，
+      因此 serverTime == 0 代表還沒有真實更新，直接跳過。
     """
 
     def __init__(
@@ -69,13 +76,26 @@ class Pose2dReader:
         try:
             updates = self._sub.readQueue()
         except Exception:
-            # 若環境/版本不支援 readQueue，就退回舊方式。
-            # 但這種情況下無法完全避免 default pose 風險。
-            raw = self._sub.get()
-            if raw is None:
+            # 若環境/版本不支援 readQueue，退回 getAtomic()。
+            #
+            # 【修正】原本用 get()，但 get() 在沒收到任何 NT 資料前
+            # 仍會回傳訂閱時提供的預設值 WpiPose2d()（x=0,y=0），
+            # 永遠不會是 None，導致零座標被誤判為合法 pose。
+            #
+            # 改用 getAtomic() 取得帶時戳的結構；
+            # NT4 的 serverTime 只有在真正收到 server 推送後才非零，
+            # serverTime == 0 代表尚未有真實更新，直接跳過。
+            try:
+                atomic = self._sub.getAtomic()
+                if atomic.serverTime == 0:
+                    # 尚未收到真實資料，不更新
+                    return
+                p = self._convert_raw_pose(atomic.value)
+            except Exception:
+                # getAtomic() 也不支援時，完全放棄 fallback，
+                # 不冒險接受可能是預設值的資料。
                 return
 
-            p = self._convert_raw_pose(raw)
             self._last_good = p
             self._has_received_real_update = True
             self._last_update_monotonic = time.monotonic()
