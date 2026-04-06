@@ -49,7 +49,7 @@ def process_camera(
     pv: PhotonMultiCamClient,
     robot_pose: Optional[Pose2d],
     cam_cfg: CameraConfig,
-    pipe_cfg: AppConfig,
+    app_cfg: AppConfig,
 ) -> List[BallObservation]:
     """
     處理單台相機的完整流程：
@@ -111,8 +111,8 @@ def process_camera(
             pitch_deg=pitch_deg,
             camera_height_m=cam_cfg.height_m,
             camera_pitch_deg=cam_cfg.pitch_deg,
-            target_height_m=pipe_cfg.target_height_m,
-            eps=pipe_cfg.distance_eps,
+            target_height_m=app_cfg.target_height_m,
+            eps=app_cfg.distance_eps,
         )
 
         if distance_m is None:
