@@ -154,7 +154,7 @@ def dedupe_two_cameras_fov(
     camera1_pose2d: Optional[Pose2d],
     camera2_pose2d: Optional[Pose2d],
     same_ball_error_m: float = 0.10,
-    max_angle_deg: float = AppConfig.dedupe_max_angle_deg,
+    max_angle_deg: float = 55.0,
     keep: KeepMode = "average",
 ) -> FovDedupeResult:
     """

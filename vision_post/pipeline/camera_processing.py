@@ -156,7 +156,7 @@ def process_all_cameras(
     pv: PhotonMultiCamClient,
     robot_pose: Optional[Pose2d],
     camera_cfgs: List[CameraConfig],
-    pipe_cfg: AppConfig,
+    app_cfg: AppConfig,
 ) -> List[BallObservation]:
     """
     依序處理多台相機，並把結果合併成單一列表。
@@ -169,7 +169,7 @@ def process_all_cameras(
                 pv=pv,
                 robot_pose=robot_pose,
                 cam_cfg=cam_cfg,
-                pipe_cfg=pipe_cfg,
+                app_cfg=app_cfg,
             )
         )
 
