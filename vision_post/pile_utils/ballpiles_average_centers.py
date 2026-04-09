@@ -183,6 +183,108 @@ def _density_center(
     return center, used_fallback, max_k, len(high_density_pts)
 
 
+def _count_neighbors_simple(
+    points: Sequence[Point2],
+    radius: float,
+) -> List[int]:
+    """
+    簡易的半徑內鄰居計算，O(N^2)。
+    因為球的數量通常很少，這個簡單版本就夠好用了。
+    """
+    r2 = radius * radius
+    counts: List[int] = []
+    for i, (x, y) in enumerate(points):
+        count = 0
+        for j, (x2, y2) in enumerate(points):
+            dx = x2 - x
+            dy = y2 - y
+            if dx * dx + dy * dy <= r2:
+                count += 1
+        counts.append(count)
+    return counts
+
+
+def _density_center_simple(
+    pile_points: Sequence[Point2],
+    density_radius_m: float,
+    spread_limit_m: float,
+) -> Tuple[Point2, bool, int, int]:
+    """
+    直接的 density center 演算法，先數每顆球在 radius 內的鄰居，
+    再用最高密度點群計算中心。
+    """
+    n = len(pile_points)
+    if n == 1:
+        return pile_points[0], False, 1, 1
+
+    neighbor_counts = _count_neighbors_simple(pile_points, radius=density_radius_m)
+    max_k = max(neighbor_counts)
+    high_density_pts = [
+        pile_points[i] for i, k in enumerate(neighbor_counts) if k == max_k
+    ]
+
+    used_fallback = False
+    if len(high_density_pts) > 1:
+        max_spread = max(
+            _dist(high_density_pts[a], high_density_pts[b])
+            for a in range(len(high_density_pts))
+            for b in range(a + 1, len(high_density_pts))
+        )
+        if max_spread > spread_limit_m:
+            best = _smartest_fallback(high_density_pts, pile_points)
+            return best, True, max_k, len(high_density_pts)
+
+    center = _centroid(high_density_pts)
+    return center, used_fallback, max_k, len(high_density_pts)
+
+
+def find_best_cluster(
+    ball_xys: Iterable[Optional[Point2]],
+    cluster_link_m: float = 0.30,
+    density_radius_m: float = 0.30,
+    density_spread_limit_m: float = 0.30,
+) -> Optional[PileCenterInfo]:
+    """
+    找出最好的球堆群組，使用 single-linkage clustering + density center。
+
+    這個函式會：
+    1. 先把球點聚成 cluster
+    2. 針對每個 cluster 計算 density center
+    3. 以最大球數優先、最高密度優先選出最佳 cluster
+    """
+    pts = _to_points(ball_xys)
+    if not pts:
+        return None
+
+    piles = cluster_ball_piles(pts, link_distance_m=cluster_link_m)
+    best_cluster: Optional[PileCenterInfo] = None
+    best_key = (-1, -1)
+
+    for pile_id, pile_points in enumerate(piles):
+        center_xy, used_fb, max_k, peak_n = _density_center_simple(
+            pile_points,
+            density_radius_m=density_radius_m,
+            spread_limit_m=density_spread_limit_m,
+        )
+        info = PileCenterInfo(
+            pile_id=pile_id,
+            points=list(pile_points),
+            center_xy=center_xy,
+            count=len(pile_points),
+            center_mode="density_vb",
+            used_insurance_fallback=used_fb,
+            densest_neighbor_count=max_k,
+            density_peak_count=peak_n,
+        )
+
+        key = (info.count, info.densest_neighbor_count or 0)
+        if key > best_key:
+            best_key = key
+            best_cluster = info
+
+    return best_cluster
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────

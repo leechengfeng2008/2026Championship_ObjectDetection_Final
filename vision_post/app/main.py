@@ -12,18 +12,18 @@ if str(ROOT) not in sys.path:
 
 from config import APP, CAMERAS, NETWORK
 
-from nt_utils.pose2d_reader import Pose2dReader
 from nt_utils.photon_nt_multicam import PhotonMultiCamClient
+from nt_utils.photon_nt_singlecam import PhotonSingleCamClient
 from nt_utils.nt_publish_utils import (
-    create_best_pose2d_publisher,
-    publish_best_pile,
+    create_best_relative_pose2d_publisher,
+    publish_best_relative_pile,
     close_publisher_instance,
 )
+from pile_utils.ballpiles_average_centers import find_best_cluster
 
 from geometry_utils.pose_utils import camera_pose2d_calculate
 from pipeline.camera_processing import process_all_cameras
 from pipeline.dedupe_processing import dedupe_two_cameras_fov
-from pipeline.pile_processing import process_piles
 
 # 目前 dedupe 只實作到雙相機，啟動時就先確認，避免執行期才炸
 _MAX_SUPPORTED_CAMERAS = 2
@@ -65,7 +65,7 @@ def _filter_fresh_camera_cfgs(pv: PhotonMultiCamClient, camera_cfgs: List) -> Li
     fresh_cfgs = []
 
     for cfg in camera_cfgs:
-        state = pv.get_state(cfg.name)
+        state = _get_client_state(pv, cfg)
 
         # 尚未收過資料
         if state.last_update_monotonic <= 0.0:
@@ -83,6 +83,37 @@ def _filter_fresh_camera_cfgs(pv: PhotonMultiCamClient, camera_cfgs: List) -> Li
     return fresh_cfgs
 
 
+def _is_single_camera_mode() -> bool:
+    return len(NETWORK.cameras) == 1
+
+
+def _create_photon_client():
+    if _is_single_camera_mode():
+        return PhotonSingleCamClient(
+            server=NETWORK.nt_server,
+            camera_name=NETWORK.cameras[0],
+            client_name=NETWORK.client_name,
+            table_name=NETWORK.table_name,
+            poll_dt=APP.nt_poll_dt,
+            sort_targets_by_area_desc=APP.sort_targets_by_area_desc,
+        )
+
+    return PhotonMultiCamClient(
+        server=NETWORK.nt_server,
+        cameras=NETWORK.cameras,
+        client_name=NETWORK.client_name,
+        table_name=NETWORK.table_name,
+        poll_dt=APP.nt_poll_dt,
+        sort_targets_by_area_desc=APP.sort_targets_by_area_desc,
+    )
+
+
+def _get_client_state(pv, cfg):
+    if _is_single_camera_mode():
+        return pv.get_state()
+    return pv.get_state(cfg.name)
+
+
 def main() -> None:
     # ------------------------------------------------------------
     # 1. 啟動前驗證相機數量（提早發現設定錯誤）
@@ -92,28 +123,17 @@ def main() -> None:
     # ------------------------------------------------------------
     # 2. 初始化 NT readers / publishers
     # ------------------------------------------------------------
-    pv = PhotonMultiCamClient(
-        server=NETWORK.nt_server,
-        cameras=NETWORK.cameras,
-        client_name=NETWORK.client_name,
-        table_name=NETWORK.table_name,
-        poll_dt=APP.nt_poll_dt,
-        sort_targets_by_area_desc=APP.sort_targets_by_area_desc,
-    )
+    pv = _create_photon_client()
     pv.start()
 
-    pose_reader = Pose2dReader(
-        server=NETWORK.nt_server,
-        topic_path=NETWORK.robot_pose_topic,
-        client_name="orangepi-pose2d-reader",
-    )
-
-    publish_inst, best_pose_pub = create_best_pose2d_publisher(
+    publish_inst, best_pose_pub = create_best_relative_pose2d_publisher(
         server=NETWORK.nt_server,
         table="SmartDashboard",
-        key="BestPilePose2d",
-        client_name="best-pile-publisher",
+        key="BestPileRelativePose2d",
+        client_name="best-pile-relative-publisher",
     )
+
+    robot_pose = Pose2d(x=0.0, y=0.0, heading_rad=0.0)
 
     if APP.debug:
         print("[main] enabled cameras:", [c.name for c in enabled_camera_cfgs])
@@ -125,26 +145,12 @@ def main() -> None:
             loop_count += 1
 
             # ----------------------------------------------------
-            # 3. 讀 robot pose
-            # ----------------------------------------------------
-            robot_pose = pose_reader.get_pose2d()
-
-            # 還沒收到真實 pose，不做後續計算
-            if robot_pose is None:
-                publish_best_pile(best_pose_pub, None, None)
-
-                if APP.debug and loop_count % APP.print_every_n_loops == 0:
-                    print("[main] waiting for valid robot pose...")
-                time.sleep(APP.loop_sleep_s)
-                continue
-
-            # ----------------------------------------------------
-            # 4. 過濾 stale / error cameras
+            # 3. 讀取相機資料並過濾 stale / error cameras
             # ----------------------------------------------------
             fresh_camera_cfgs = _filter_fresh_camera_cfgs(pv, enabled_camera_cfgs)
 
             if not fresh_camera_cfgs:
-                publish_best_pile(best_pose_pub, None, robot_pose)
+                publish_best_relative_pile(best_pose_pub, None, robot_pose)
 
                 if APP.debug and loop_count % APP.print_every_n_loops == 0:
                     print("[main] no fresh cameras available")
@@ -154,16 +160,23 @@ def main() -> None:
             # ----------------------------------------------------
             # 5. 第一條 pipeline：targets -> BallObservation
             # ----------------------------------------------------
-            all_observations = process_all_cameras(
-                pv=pv,
-                robot_pose=robot_pose,
-                camera_cfgs=fresh_camera_cfgs,
-                app_cfg=APP,
-            )
+            if _is_single_camera_mode():
+                all_observations = pv.compute_ball_observations(
+                    robot_pose=robot_pose,
+                    cam_cfg=fresh_camera_cfgs[0],
+                    app_cfg=APP,
+                )
+            else:
+                all_observations = process_all_cameras(
+                    pv=pv,
+                    robot_pose=robot_pose,
+                    camera_cfgs=fresh_camera_cfgs,
+                    app_cfg=APP,
+                )
 
             # 若完全沒有球，清空 publish
             if not all_observations:
-                publish_best_pile(best_pose_pub, None, robot_pose)
+                publish_best_relative_pile(best_pose_pub, None, robot_pose)
 
                 if APP.debug and loop_count % APP.print_every_n_loops == 0:
                     print("[main] no observations")
@@ -219,22 +232,20 @@ def main() -> None:
                 )
 
             # ----------------------------------------------------
-            # 7. 第二條 pipeline 後段：分堆 -> 選最佳堆
+            # 7. 第二條 pipeline 後段：使用 density center 找最佳 cluster
             # ----------------------------------------------------
-            pile_result = process_piles(
-                ball_points=unique_ball_points,
-                robot_pose=robot_pose,
-                app_cfg=APP,
-                method="rect",   # 你之後若要切第二版可改成 "center"
+            best_candidate = find_best_cluster(
+                ball_xys=unique_ball_points,
+                cluster_link_m=0.30,
+                density_radius_m=0.30,
+                density_spread_limit_m=0.30,
             )
-
-            best_center_xy = pile_result.best_center_xy
-            best_candidate = pile_result.selection_result.best_candidate
+            best_center_xy = best_candidate.center_xy if best_candidate is not None else None
 
             # ----------------------------------------------------
             # 8. 發布最佳球堆
             # ----------------------------------------------------
-            publish_best_pile(
+            publish_best_relative_pile(
                 best_pose_pub,
                 best_candidate,
                 robot_pose,
@@ -250,24 +261,15 @@ def main() -> None:
                 print(f"[main] fresh cameras = {[c.name for c in fresh_camera_cfgs]}")
                 print(f"[main] observations = {len(all_observations)}")
                 print(f"[main] unique_ball_points = {len(unique_ball_points)}")
-                print(f"[main] pile_method = {pile_result.method}")
+                print("[main] cluster method = density center")
 
                 if best_center_xy is None:
-                    print("[main] best pile = None")
+                    print("[main] best cluster = None")
                 else:
-                    print(f"[main] best pile center = ({best_center_xy[0]:.3f}, "
-                          f"{best_center_xy[1]:.3f})")
-
-                # 額外列出分堆評分前幾名
-                score_infos = pile_result.selection_result.score_infos
-                for i, s in enumerate(score_infos[:5]):
                     print(
-                        f"[score {i}] pile_id={s.pile_id} "
-                        f"count={s.count} "
-                        f"dist={s.distance_from_robot_m:.3f} "
-                        f"near={s.near_score:.3f} "
-                        f"count_score={s.count_score:.3f} "
-                        f"final={s.final_score:.3f}"
+                        f"[main] best cluster center = ({best_center_xy[0]:.3f}, "
+                        f"{best_center_xy[1]:.3f}), count={best_candidate.count}, "
+                        f"densest_neighbors={best_candidate.densest_neighbor_count}"
                     )
 
             time.sleep(APP.loop_sleep_s)
