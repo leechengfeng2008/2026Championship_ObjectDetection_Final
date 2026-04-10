@@ -14,6 +14,7 @@ NetworkTables 發布工具，供 main.py共用。
 """
 
 import math
+import time
 from typing import Optional
 
 import ntcore
@@ -54,6 +55,20 @@ def close_publisher_instance(inst) -> None:
         inst.stopClient()
     except Exception:
         pass
+
+
+def create_best_relative_pose2d_publisher(
+    server: str,
+    table: str = "SmartDashboard",
+    key: str = "BestPileRelativePose2d",
+    client_name: str = "best-pile-relative-publisher",
+):
+    inst = ntcore.NetworkTableInstance.create()
+    inst.startClient4(client_name)
+    inst.setServer(server)
+
+    pub = inst.getTable(table).getDoubleArrayTopic(key).publish()
+    return inst, pub
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +113,41 @@ def publish_best_pile(
         heading_deg = math.degrees(math.atan2(dy, dx))
 
     pub.set([x, y, heading_deg])
+
+
+def publish_best_relative_pile(
+    pub,
+    best_pile,
+    robot_pose2d,
+) -> None:
+    """
+    Publish the best pile in robot-relative coordinates with a timestamp.
+
+    Format: [timestamp_s, x, y, heading_deg]
+      - x, y        : pile center in robot frame (m)
+      - heading_deg : angle from robot to pile center in robot frame (deg)
+    """
+    if best_pile is None or robot_pose2d is None:
+        pub.set([])
+        return
+
+    try:
+        x = float(best_pile.center_xy[0])
+        y = float(best_pile.center_xy[1])
+    except Exception:
+        pub.set([])
+        return
+
+    dx = x - float(robot_pose2d.x)
+    dy = y - float(robot_pose2d.y)
+
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        heading_deg = math.degrees(float(robot_pose2d.heading_rad))
+    else:
+        heading_deg = math.degrees(math.atan2(dy, dx))
+
+    timestamp_s = time.time()
+    pub.set([timestamp_s, x, y, heading_deg])
 
 
 def publish_best_center_xy_only(

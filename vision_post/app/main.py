@@ -11,12 +11,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import APP, CAMERAS, NETWORK
+from dataclasses import dataclass
 
-from nt_utils.pose2d_reader import Pose2dReader
 from nt_utils.photon_nt_multicam import PhotonMultiCamClient
 from nt_utils.nt_publish_utils import (
-    create_best_pose2d_publisher,
-    publish_best_pile,
+    create_best_relative_pose2d_publisher,
+    publish_best_relative_pile,
     close_publisher_instance,
 )
 
@@ -24,6 +24,13 @@ from geometry_utils.pose_utils import camera_pose2d_calculate
 from pipeline.camera_processing import process_all_cameras
 from pipeline.dedupe_processing import dedupe_two_cameras_fov
 from pipeline.pile_processing import process_piles
+
+
+@dataclass(frozen=True)
+class RobotPose:
+    x: float
+    y: float
+    heading_rad: float
 
 # 目前 dedupe 只實作到雙相機，啟動時就先確認，避免執行期才炸
 _MAX_SUPPORTED_CAMERAS = 2
@@ -102,18 +109,14 @@ def main() -> None:
     )
     pv.start()
 
-    pose_reader = Pose2dReader(
-        server=NETWORK.nt_server,
-        topic_path=NETWORK.robot_pose_topic,
-        client_name="orangepi-pose2d-reader",
-    )
-
-    publish_inst, best_pose_pub = create_best_pose2d_publisher(
+    publish_inst, best_pose_pub = create_best_relative_pose2d_publisher(
         server=NETWORK.nt_server,
         table="SmartDashboard",
-        key="BestPilePose2d",
-        client_name="best-pile-publisher",
+        key="BestPileRelativePose2d",
+        client_name="best-pile-relative-publisher",
     )
+
+    robot_pose = RobotPose(x=0.0, y=0.0, heading_rad=0.0)
 
     if APP.debug:
         print("[main] enabled cameras:", [c.name for c in enabled_camera_cfgs])
@@ -125,26 +128,12 @@ def main() -> None:
             loop_count += 1
 
             # ----------------------------------------------------
-            # 3. 讀 robot pose
-            # ----------------------------------------------------
-            robot_pose = pose_reader.get_pose2d()
-
-            # 還沒收到真實 pose，不做後續計算
-            if robot_pose is None:
-                publish_best_pile(best_pose_pub, None, None)
-
-                if APP.debug and loop_count % APP.print_every_n_loops == 0:
-                    print("[main] waiting for valid robot pose...")
-                time.sleep(APP.loop_sleep_s)
-                continue
-
-            # ----------------------------------------------------
-            # 4. 過濾 stale / error cameras
+            # 3. 過濾 stale / error cameras
             # ----------------------------------------------------
             fresh_camera_cfgs = _filter_fresh_camera_cfgs(pv, enabled_camera_cfgs)
 
             if not fresh_camera_cfgs:
-                publish_best_pile(best_pose_pub, None, robot_pose)
+                publish_best_relative_pile(best_pose_pub, None, robot_pose)
 
                 if APP.debug and loop_count % APP.print_every_n_loops == 0:
                     print("[main] no fresh cameras available")
@@ -163,7 +152,7 @@ def main() -> None:
 
             # 若完全沒有球，清空 publish
             if not all_observations:
-                publish_best_pile(best_pose_pub, None, robot_pose)
+                publish_best_relative_pile(best_pose_pub, None, robot_pose)
 
                 if APP.debug and loop_count % APP.print_every_n_loops == 0:
                     print("[main] no observations")
@@ -234,7 +223,7 @@ def main() -> None:
             # ----------------------------------------------------
             # 8. 發布最佳球堆
             # ----------------------------------------------------
-            publish_best_pile(
+            publish_best_relative_pile(
                 best_pose_pub,
                 best_candidate,
                 robot_pose,
